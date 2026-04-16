@@ -24,6 +24,7 @@ var (
 func main() {
 	start := time.Now()
 
+	// Caminho raiz onde estão os pacotes extraídos do D365
 	rootPath := filepath.Join("temp", "PackageLocalDirectory")
 
 	entries, err := os.ReadDir(rootPath)
@@ -32,16 +33,20 @@ func main() {
 		return
 	}
 
+	// Faz uma varredura prévia para saber o total de arquivos AxTable a processar (para exibir progresso)
 	total := countTotalAxTableFiles(rootPath, entries)
 
 	var processed atomic.Int64
+	// Inicia goroutine para exibir progresso periodicamente
 	stopProgress := startProgressReporter(&processed, total)
 
+	// allResults armazena todos os campos de todas as tabelas processadas
 	var (
 		allMutex   sync.Mutex
 		allResults []entity.TableFieldInfo
 	)
 
+	// Para cada pacote encontrado no diretório raiz
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -50,10 +55,12 @@ func main() {
 		packageDir := entry.Name()
 		descriptorPath := filepath.Join(rootPath, packageDir, "Descriptor")
 
+		// Só processa se existir a pasta Descriptor (pacote válido)
 		if _, err := os.Stat(descriptorPath); os.IsNotExist(err) {
 			continue
 		}
 
+		// Processa a pasta Descriptor e coleta os campos das tabelas
 		results := processDescriptorFolder(descriptorPath, filepath.Join(rootPath, packageDir), &processed)
 		allMutex.Lock()
 		allResults = append(allResults, results...)
@@ -64,8 +71,10 @@ func main() {
 
 	n := processed.Load()
 	fmt.Fprint(os.Stderr, "\r")
+	// Exibe resumo final do processamento
 	successColor.Fprintf(os.Stderr, "Concluído: %d de %d arquivos lidos em %s\n", n, total, time.Since(start))
 
+	// Exemplo de uso: imprime todos os campos encontrados
 	for _, info := range allResults {
 		fmt.Printf("tabela: %s, campo: %s, ExtendedDataType: %s\n",
 			info.TableName,
@@ -75,8 +84,15 @@ func main() {
 	}
 }
 
-// countTotalAxTableFiles faz uma varredura prévia para saber quantos arquivos XML
+// Faz uma varredura prévia para saber quantos arquivos XML
 // existem nas pastas AxTable (usado para exibir o progresso total).
+//
+// Parâmetros:
+//   - rootPath: caminho raiz dos pacotes extraídos
+//   - entries: lista de diretórios/pacotes
+//
+// Retorna:
+//   - total de arquivos AxTable.xml encontrados
 func countTotalAxTableFiles(rootPath string, entries []os.DirEntry) int64 {
 	var total int64
 	for _, entry := range entries {
@@ -109,8 +125,14 @@ func countTotalAxTableFiles(rootPath string, entries []os.DirEntry) int64 {
 	return total
 }
 
-// startProgressReporter inicia uma goroutine que imprime o progresso a cada segundo.
-// Retorna uma função para parar o reporter (aguarda a goroutine encerrar).
+// Inicia uma goroutine que exibe o progresso do processamento a cada segundo.
+//
+// Parâmetros:
+//   - processed: ponteiro para contador atômico de arquivos processados
+//   - total: total de arquivos a processar
+//
+// Retorna:
+//   - função que, ao ser chamada, encerra o progresso
 func startProgressReporter(processed *atomic.Int64, total int64) func() {
 	stop := make(chan struct{})
 	done := make(chan struct{})
@@ -136,6 +158,16 @@ func startProgressReporter(processed *atomic.Int64, total int64) func() {
 	}
 }
 
+// Processa todos os arquivos XML da pasta Descriptor de um pacote.
+// Para cada arquivo, tenta encontrar e processar a pasta AxTable correspondente.
+//
+// Parâmetros:
+//   - descriptorPath: caminho da pasta Descriptor
+//   - packagePath: caminho do pacote
+//   - processed: ponteiro para contador atômico de progresso
+//
+// Retorna:
+//   - slice com todos os campos das tabelas encontradas
 func processDescriptorFolder(descriptorPath, packagePath string, processed *atomic.Int64) []entity.TableFieldInfo {
 	xmlFiles, err := os.ReadDir(descriptorPath)
 	if err != nil {
@@ -152,6 +184,7 @@ func processDescriptorFolder(descriptorPath, packagePath string, processed *atom
 
 		xmlFilePath := filepath.Join(descriptorPath, xmlFile.Name())
 
+		// Lê o arquivo descriptor apenas para garantir que é válido
 		_, err := readDescriptorXML(xmlFilePath)
 		if err != nil {
 			errColor.Fprintf(os.Stderr, "\nerro ao ler descriptor %s: %v\n", xmlFile.Name(), err)
@@ -161,6 +194,7 @@ func processDescriptorFolder(descriptorPath, packagePath string, processed *atom
 		folderName := strings.TrimSuffix(xmlFile.Name(), ".xml")
 		tableFolderPath := filepath.Join(packagePath, folderName, "AxTable")
 
+		// Se existir a pasta AxTable correspondente, processa todos os arquivos nela
 		if _, err := os.Stat(tableFolderPath); !os.IsNotExist(err) {
 			tableResults := processAxTableFolder(tableFolderPath, processed)
 			results = append(results, tableResults...)
@@ -170,6 +204,14 @@ func processDescriptorFolder(descriptorPath, packagePath string, processed *atom
 	return results
 }
 
+// readDescriptorXML faz o Unmarshal do XML do descriptor apenas para validar e extrair o DisplayName.
+//
+// Parâmetros:
+//   - filePath: caminho do arquivo descriptor XML
+//
+// Retorna:
+//   - DisplayName extraído do XML
+//   - erro, se houver
 func readDescriptorXML(filePath string) (string, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -185,6 +227,14 @@ func readDescriptorXML(filePath string) (string, error) {
 	return descriptor.DisplayName, nil
 }
 
+// processAxTableFolder processa todos os arquivos AxTable.xml de uma pasta em paralelo (até maxWorkers).
+//
+// Parâmetros:
+//   - axTablePath: caminho da pasta AxTable
+//   - processed: ponteiro para contador atômico de progresso
+//
+// Retorna:
+//   - slice com todos os campos das tabelas encontrados
 func processAxTableFolder(axTablePath string, processed *atomic.Int64) []entity.TableFieldInfo {
 	xmlFiles, err := os.ReadDir(axTablePath)
 	if err != nil {
@@ -192,7 +242,7 @@ func processAxTableFolder(axTablePath string, processed *atomic.Int64) []entity.
 		return nil
 	}
 
-	const maxWorkers = 8
+	const maxWorkers = 8 // Limita concorrência para não sobrecarregar o sistema
 
 	var (
 		group   errgroup.Group
@@ -211,6 +261,7 @@ func processAxTableFolder(axTablePath string, processed *atomic.Int64) []entity.
 		group.Go(func() error {
 			xmlFilePath := filepath.Join(axTablePath, xmlFile.Name())
 
+			// Lê e extrai todos os campos da tabela deste arquivo
 			tableInfos, err := readAxTableXML(xmlFilePath)
 			if err != nil {
 				return fmt.Errorf("erro ao ler %s: %w", xmlFile.Name(), err)
@@ -232,6 +283,14 @@ func processAxTableFolder(axTablePath string, processed *atomic.Int64) []entity.
 	return results
 }
 
+// readAxTableXML faz o Unmarshal do AxTable.xml e retorna todos os campos da tabela.
+//
+// Parâmetros:
+//   - filePath: caminho do arquivo AxTable.xml
+//
+// Retorna:
+//   - slice com TableFieldInfo para cada campo da tabela
+//   - erro, se houver
 func readAxTableXML(filePath string) ([]entity.TableFieldInfo, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -246,6 +305,7 @@ func readAxTableXML(filePath string) ([]entity.TableFieldInfo, error) {
 
 	var results []entity.TableFieldInfo
 
+	// Para cada campo da tabela, cria um TableFieldInfo
 	for _, field := range axTable.Fields.AxTableField {
 		info := entity.TableFieldInfo{
 			TableName:        axTable.Name,
