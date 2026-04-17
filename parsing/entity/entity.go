@@ -2,9 +2,14 @@ package entity
 
 import "encoding/xml"
 
+// Descriptor representa os metadados de um modelo D365 (arquivo XML da pasta Descriptor).
+// ModelFolder é preenchido manualmente após a leitura, com o nome do arquivo XML sem extensão,
+// correspondendo à pasta do modelo dentro do pacote.
+// ModelName é o alias legível de DisplayName para facilitar a leitura do código.
 type Descriptor struct {
 	XMLName     xml.Name `xml:"AxModelInfo"`
-	DisplayName string   `xml:"DisplayName"`
+	DisplayName string   `xml:"DisplayName"` // nome legível do modelo (ex: "Application Suite")
+	ModelFolder string   `xml:"-"`           // nome do arquivo XML sem extensão (ex: "Foundation")
 }
 
 type AxTable struct {
