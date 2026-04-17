@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// outputZipPath define o caminho do arquivo ZIP de saída gerado ao final do processamento.
+// outputZipPath defines the path of the output ZIP file generated at the end of processing.
 const outputZipPath = "temp/output.zip"
 
 var (
@@ -29,19 +29,19 @@ var (
 func main() {
 	start := time.Now()
 
-	// Caminho raiz onde estão os pacotes extraídos do D365 (ex: ApplicationSuite, SCMControls...)
+	// Root path where the extracted D365 packages are located (e.g., ApplicationSuite, SCMControls...)
 	rootPath := filepath.Join("temp", "PackagesLocalDirectory")
 
 	entries, err := os.ReadDir(rootPath)
 	if err != nil {
-		errColor.Fprintf(os.Stderr, "erro ao ler diretório %s: %v\n", rootPath, err)
+		errColor.Fprintf(os.Stderr, "error reading directory %s: %v\n", rootPath, err)
 		return
 	}
 
-	// Cria o arquivo ZIP que irá conter todos os JSONs gerados
+	// Create the ZIP file that will contain all generated JSONs
 	zipFile, err := os.Create(outputZipPath)
 	if err != nil {
-		errColor.Fprintf(os.Stderr, "erro ao criar arquivo ZIP %s: %v\n", outputZipPath, err)
+		errColor.Fprintf(os.Stderr, "error creating ZIP file %s: %v\n", outputZipPath, err)
 		return
 	}
 	defer zipFile.Close()
@@ -51,15 +51,15 @@ func main() {
 
 	var zipMutex sync.Mutex
 
-	// Faz uma varredura prévia para saber o total de arquivos AxTable a processar (para exibir progresso)
+	// Pre-scan to know the total number of AxTable files to process (for progress display)
 	total := countTotalAxTableFiles(rootPath, entries)
 
 	var processed atomic.Int64
 
-	// Inicia goroutine para exibir progresso periodicamente
+	// Start goroutine to periodically display progress
 	stopProgress := startProgressReporter(&processed, total)
 
-	// Para cada pacote encontrado no diretório raiz (ex: ApplicationSuite)
+	// For each package found in the root directory (e.g., ApplicationSuite)
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -68,12 +68,12 @@ func main() {
 		packageDir := entry.Name()
 		descriptorPath := filepath.Join(rootPath, packageDir, "Descriptor")
 
-		// Só processa se existir a pasta Descriptor (pacote válido)
+		// Only process if the Descriptor folder exists (valid package)
 		if _, err := os.Stat(descriptorPath); os.IsNotExist(err) {
 			continue
 		}
 
-		// Lê os descritores e processa as pastas AxTable, gravando JSONs no ZIP
+		// Read descriptors and process AxTable folders, writing JSONs to the ZIP
 		processDescriptorFolder(
 			descriptorPath,
 			filepath.Join(rootPath, packageDir),
@@ -89,20 +89,20 @@ func main() {
 	n := processed.Load()
 	fmt.Fprint(os.Stderr, "\r")
 
-	// Exibe resumo final do processamento
-	successColor.Fprintf(os.Stderr, "Concluído: %d de %d arquivos lidos em %s\n", n, total, time.Since(start))
-	successColor.Fprintf(os.Stderr, "ZIP gerado em: %s\n", outputZipPath)
+	// Display final processing summary
+	successColor.Fprintf(os.Stderr, "Completed: %d of %d files read in %s\n", n, total, time.Since(start))
+	successColor.Fprintf(os.Stderr, "ZIP generated at: %s\n", outputZipPath)
 }
 
-// countTotalAxTableFiles faz uma varredura prévia para saber quantos arquivos XML
-// existem nas pastas AxTable (usado para exibir o progresso total).
+// countTotalAxTableFiles performs a pre-scan to determine how many XML files
+// exist in the AxTable folders (used to display total progress).
 //
-// Parâmetros:
-//   - rootPath: caminho raiz dos pacotes extraídos
-//   - entries: lista de diretórios/pacotes
+// Parameters:
+//   - rootPath: root path of the extracted packages
+//   - entries: list of directories/packages
 //
-// Retorna:
-//   - total de arquivos AxTable.xml encontrados
+// Returns:
+//   - total number of AxTable.xml files found
 func countTotalAxTableFiles(rootPath string, entries []os.DirEntry) int64 {
 	var total int64
 
@@ -136,14 +136,14 @@ func countTotalAxTableFiles(rootPath string, entries []os.DirEntry) int64 {
 	return total
 }
 
-// startProgressReporter inicia uma goroutine que exibe o progresso do processamento a cada segundo.
+// startProgressReporter starts a goroutine that displays processing progress every second.
 //
-// Parâmetros:
-//   - processed: ponteiro para contador atômico de arquivos processados
-//   - total: total de arquivos a processar
+// Parameters:
+//   - processed: pointer to atomic counter of processed files
+//   - total: total number of files to process
 //
-// Retorna:
-//   - função que, ao ser chamada, encerra o progresso
+// Returns:
+//   - function that, when called, stops the progress display
 func startProgressReporter(processed *atomic.Int64, total int64) func() {
 	stop := make(chan struct{})
 	done := make(chan struct{})
@@ -156,7 +156,7 @@ func startProgressReporter(processed *atomic.Int64, total int64) func() {
 			select {
 			case <-ticker.C:
 				n := processed.Load()
-				progressColor.Fprintf(os.Stderr, "\rArquivos lidos: %d de %d", n, total)
+				progressColor.Fprintf(os.Stderr, "\rFiles read: %d of %d", n, total)
 			case <-stop:
 				return
 			}
@@ -169,20 +169,20 @@ func startProgressReporter(processed *atomic.Int64, total int64) func() {
 	}
 }
 
-// processDescriptorFolder processa todos os arquivos XML da pasta Descriptor de um pacote.
-// Para cada arquivo XML encontrado:
-//   - extrai o modelFolder (nome do arquivo sem extensão)
-//   - extrai o modelName (campo DisplayName dentro de AxModelInfo)
-//   - localiza a pasta modelFolder dentro do pacote e processa a subpasta AxTable
-//   - gera um arquivo JSON por tabela e o grava no ZIP
+// processDescriptorFolder processes all XML files in the Descriptor folder of a package.
+// For each XML file found:
+//   - extracts modelFolder (filename without extension)
+//   - extracts modelName (DisplayName field inside AxModelInfo)
+//   - locates the modelFolder inside the package and processes the AxTable subfolder
+//   - generates a JSON file per table and writes it to the ZIP
 //
-// Parâmetros:
-//   - descriptorPath: caminho da pasta Descriptor
-//   - packagePath: caminho da raiz do pacote (ex: .../ApplicationSuite)
-//   - packageDir: nome do diretório do pacote (ex: "ApplicationSuite")
-//   - processed: ponteiro para contador atômico de progresso
-//   - zipWriter: escritor do arquivo ZIP de saída
-//   - zipMutex: mutex para proteger escritas concorrentes no ZIP
+// Parameters:
+//   - descriptorPath: path to the Descriptor folder
+//   - packagePath: root path of the package (e.g., .../ApplicationSuite)
+//   - packageDir: name of the package directory (e.g., "ApplicationSuite")
+//   - processed: pointer to atomic progress counter
+//   - zipWriter: output ZIP file writer
+//   - zipMutex: mutex to protect concurrent writes to the ZIP
 func processDescriptorFolder(
 	descriptorPath, packagePath, packageDir string,
 	processed *atomic.Int64,
@@ -202,7 +202,7 @@ func processDescriptorFolder(
 
 		xmlFilePath := filepath.Join(descriptorPath, xmlFile.Name())
 
-		// modelFolder → nome do arquivo descriptor sem extensão (ex: "Foundation")
+		// modelFolder → descriptor filename without extension (e.g., "Foundation")
 		modelFolder := strings.TrimSuffix(xmlFile.Name(), ".xml")
 
 		descriptor, err := readDescriptorXML(xmlFilePath, modelFolder)
@@ -211,12 +211,12 @@ func processDescriptorFolder(
 			continue
 		}
 
-		// descriptor.DisplayName → modelName legível (ex: "Application Suite")
+		// descriptor.DisplayName → readable modelName (e.g., "Application Suite")
 		_ = descriptor.DisplayName
 
 		axTablePath := filepath.Join(packagePath, descriptor.ModelFolder, "AxTable")
 
-		// Processa a pasta AxTable somente se ela existir
+		// Only process the AxTable folder if it exists
 		if _, err := os.Stat(axTablePath); os.IsNotExist(err) {
 			continue
 		}
@@ -225,15 +225,15 @@ func processDescriptorFolder(
 	}
 }
 
-// readDescriptorXML faz o Unmarshal do XML do descriptor e preenche o campo ModelFolder.
+// readDescriptorXML unmarshals the descriptor XML and fills the ModelFolder field.
 //
-// Parâmetros:
-//   - filePath: caminho do arquivo descriptor XML
-//   - modelFolder: nome derivado do arquivo (sem extensão), atribuído a Descriptor.ModelFolder
+// Parameters:
+//   - filePath: path to the descriptor XML file
+//   - modelFolder: name derived from the file (without extension), assigned to Descriptor.ModelFolder
 //
-// Retorna:
-//   - Descriptor com DisplayName e ModelFolder preenchidos
-//   - erro, se houver
+// Returns:
+//   - Descriptor with DisplayName and ModelFolder filled
+//   - error, if any
 func readDescriptorXML(filePath, modelFolder string) (entity.Descriptor, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -250,16 +250,16 @@ func readDescriptorXML(filePath, modelFolder string) (entity.Descriptor, error) 
 	return descriptor, nil
 }
 
-// processAxTableFolder processa todos os arquivos AxTable.xml de uma pasta em paralelo (até maxWorkers).
-// Para cada arquivo, faz o parse do XML, serializa para JSON e grava no ZIP.
+// processAxTableFolder processes all AxTable.xml files in a folder in parallel (up to maxWorkers).
+// For each file, parses the XML, serializes to JSON, and writes to the ZIP.
 //
-// Parâmetros:
-//   - axTablePath: caminho da pasta AxTable
-//   - packageDir: nome do pacote pai (ex: "ApplicationSuite")
-//   - modelFolder: nome da pasta do modelo (ex: "Foundation")
-//   - processed: ponteiro para contador atômico de progresso
-//   - zipWriter: escritor do arquivo ZIP de saída
-//   - zipMutex: mutex para proteger escritas concorrentes no ZIP
+// Parameters:
+//   - axTablePath: path to the AxTable folder
+//   - packageDir: name of the parent package (e.g., "ApplicationSuite")
+//   - modelFolder: name of the model folder (e.g., "Foundation")
+//   - processed: pointer to atomic progress counter
+//   - zipWriter: output ZIP file writer
+//   - zipMutex: mutex to protect concurrent writes to the ZIP
 func processAxTableFolder(
 	axTablePath, packageDir, modelFolder string,
 	processed *atomic.Int64,
@@ -272,7 +272,7 @@ func processAxTableFolder(
 		return
 	}
 
-	const maxWorkers = 8 // Limita concorrência para não sobrecarregar o sistema
+	const maxWorkers = 8 // Limits concurrency to avoid overloading the system
 
 	var group errgroup.Group
 
@@ -283,21 +283,21 @@ func processAxTableFolder(
 			continue
 		}
 
-		// Cria uma cópia local para evitar problemas de closure na goroutine (corrigido com go 1.22+)
+		// Create a local copy to avoid closure issues in the goroutine (fixed in Go 1.22+)
 		xmlFile := xmlFile
 
 		group.Go(func() error {
 			xmlFilePath := filepath.Join(axTablePath, xmlFile.Name())
 
-			// Faz o parse do XML da tabela
+			// Parse the table XML
 			table, err := readAxTableXML(xmlFilePath)
 			if err != nil {
-				return fmt.Errorf("erro ao ler %s: %w", xmlFile.Name(), err)
+				return fmt.Errorf("error reading %s: %w", xmlFile.Name(), err)
 			}
 
-			// Serializa para JSON e grava no arquivo ZIP
+			// Serialize to JSON and write to the ZIP file
 			if err := writeTableJSON(zipWriter, zipMutex, packageDir, modelFolder, table); err != nil {
-				return fmt.Errorf("erro ao gravar JSON de %s: %w", table.Name, err)
+				return fmt.Errorf("error writing JSON for %s: %w", table.Name, err)
 			}
 
 			processed.Add(1)
@@ -310,14 +310,14 @@ func processAxTableFolder(
 	}
 }
 
-// readAxTableXML faz o Unmarshal de um arquivo AxTable.xml e retorna a estrutura AxTable.
+// readAxTableXML unmarshals an AxTable.xml file and returns the AxTable structure.
 //
-// Parâmetros:
-//   - filePath: caminho do arquivo AxTable.xml
+// Parameters:
+//   - filePath: path to the AxTable.xml file
 //
-// Retorna:
-//   - struct AxTable com todos os campos lidos
-//   - erro, se houver
+// Returns:
+//   - AxTable struct with all fields read
+//   - error, if any
 func readAxTableXML(filePath string) (entity.AxTable, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -332,18 +332,18 @@ func readAxTableXML(filePath string) (entity.AxTable, error) {
 	return axTable, nil
 }
 
-// writeTableJSON serializa um AxTable para JSON indentado e o grava como entrada no arquivo ZIP.
-// O caminho da entrada dentro do ZIP segue o padrão: packageDir/modelFolder/NomeDaTabela.json
+// writeTableJSON serializes an AxTable to indented JSON and writes it as an entry in the ZIP file.
+// The entry path inside the ZIP follows the pattern: packageDir/modelFolder/TableName.json
 //
-// Parâmetros:
-//   - zipWriter: escritor do arquivo ZIP de saída
-//   - mutex: mutex para garantir acesso exclusivo ao zipWriter
-//   - packageDir: nome do pacote pai (ex: "ApplicationSuite")
-//   - modelFolder: nome da pasta do modelo (ex: "Foundation")
-//   - table: struct AxTable a ser serializada
+// Parameters:
+//   - zipWriter: output ZIP file writer
+//   - mutex: mutex to ensure exclusive access to zipWriter
+//   - packageDir: name of the parent package (e.g., "ApplicationSuite")
+//   - modelFolder: name of the model folder (e.g., "Foundation")
+//   - table: AxTable struct to be serialized
 //
-// Retorna:
-//   - erro, se houver
+// Returns:
+//   - error, if any
 func writeTableJSON(
 	zipWriter *zip.Writer,
 	mutex *sync.Mutex,
@@ -353,10 +353,10 @@ func writeTableJSON(
 
 	jsonData, err := json.MarshalIndent(table, "", "  ")
 	if err != nil {
-		return fmt.Errorf("erro ao serializar JSON: %w", err)
+		return fmt.Errorf("error serializing JSON: %w", err)
 	}
 
-	// Caminho dentro do ZIP: pacote/modelFolder/NomeDaTabela.json
+	// Path inside the ZIP: package/modelFolder/TableName.json
 	entryName := fmt.Sprintf("%s/%s/%s.json", packageDir, modelFolder, table.Name)
 
 	mutex.Lock()
