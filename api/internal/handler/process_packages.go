@@ -1,8 +1,9 @@
-package handlers
+package handler
 
 import (
+	"bufio"
 	"compress/gzip"
-	"fmt"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -10,51 +11,54 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func ProcessPackages(c *gin.Context) {
-	var reader io.ReadCloser
-	var err error
+type Record map[string]any
 
+func ProcessPackages(c *gin.Context) {
 	body := c.Request.Body
+	defer body.Close()
+
+	var reader io.Reader = body
 
 	if c.GetHeader("Content-Encoding") == "gzip" {
-		reader, err = gzip.NewReader(body)
+		gz, err := gzip.NewReader(body)
 		if err != nil {
 			c.Status(http.StatusBadRequest)
 			return
 		}
-		defer reader.Close()
-	} else {
-		reader = body
+		defer gz.Close()
+		reader = gz
 	}
 
-	defer body.Close()
+	scanner := bufio.NewScanner(reader)
 
-	buffer := make([]byte, 32*1024) // 32Kb
+	const maxCapacity = 10 * 1024 * 1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
 
-	var total int64
+	var count int64
 
-	for {
-		n, err := reader.Read(buffer)
-		if n > 0 {
-			total += int64(n)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+
+		var record Record
+
+		if err := json.Unmarshal(line, &record); err != nil {
+			log.Println("invalid json:", err)
+			continue
 		}
-
-		fmt.Printf("read %d\n", n)
-
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			log.Println("read error:", err)
-			c.Status(http.StatusInternalServerError)
-			return
-		}
+		count++
 	}
 
-	log.Printf("Decompressed bytes received: %d\n", total)
+	if err := scanner.Err(); err != nil {
+		log.Println("scanner error:", err)
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Processed records: %d\n", count)
 
 	c.JSON(http.StatusOK, gin.H{
-		"bytes_received": total,
+		"records_processed": count,
 	})
+
 }

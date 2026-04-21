@@ -1,10 +1,12 @@
 package main
 
 import (
-	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,9 +19,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// outputZipPath defines the path of the output ZIP file generated at the end of processing.
-const outputZipPath = "temp/output.zip"
-
 var (
 	errColor      = color.New(color.FgRed, color.Bold)
 	progressColor = color.New(color.FgCyan)
@@ -29,37 +28,53 @@ var (
 func main() {
 	start := time.Now()
 
-	// Root path where the extracted D365 packages are located (e.g., ApplicationSuite, SCMControls...)
 	rootPath := filepath.Join("temp", "PackagesLocalDirectory")
-
 	entries, err := os.ReadDir(rootPath)
 	if err != nil {
 		errColor.Fprintf(os.Stderr, "error reading directory %s: %v\n", rootPath, err)
 		return
 	}
 
-	// Create the ZIP file that will contain all generated JSONs
-	zipFile, err := os.Create(outputZipPath)
-	if err != nil {
-		errColor.Fprintf(os.Stderr, "error creating ZIP file %s: %v\n", outputZipPath, err)
-		return
-	}
-	defer zipFile.Close()
-
-	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
-
-	var zipMutex sync.Mutex
-
-	// Pre-scan to know the total number of AxTable files to process (for progress display)
 	total := countTotalAxTableFiles(rootPath, entries)
-
 	var processed atomic.Int64
 
-	// Start goroutine to periodically display progress
 	stopProgress := startProgressReporter(&processed, total)
 
-	// For each package found in the root directory (e.g., ApplicationSuite)
+	// Prepare HTTP request with GZIP streaming
+	pr, pw := io.Pipe()
+	gzipWriter := gzip.NewWriter(pw)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		client := &http.Client{}
+		req, err := http.NewRequest("POST", "http://localhost:8080/api/process-packages", pr)
+		if err != nil {
+			errColor.Fprintf(os.Stderr, "error creating HTTP request: %v\n", err)
+			pr.CloseWithError(err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/x-ndjson")
+		req.Header.Set("Content-Encoding", "gzip")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			errColor.Fprintf(os.Stderr, "error sending HTTP request: %v\n", err)
+			pr.CloseWithError(err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			body, _ := io.ReadAll(resp.Body)
+			errColor.Fprintf(os.Stderr, "server returned status %d: %s\n", resp.StatusCode, string(body))
+		}
+	}()
+
+	var gzipMutex sync.Mutex
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -68,30 +83,30 @@ func main() {
 		packageDir := entry.Name()
 		descriptorPath := filepath.Join(rootPath, packageDir, "Descriptor")
 
-		// Only process if the Descriptor folder exists (valid package)
 		if _, err := os.Stat(descriptorPath); os.IsNotExist(err) {
 			continue
 		}
 
-		// Read descriptors and process AxTable folders, writing JSONs to the ZIP
-		processDescriptorFolder(
+		processDescriptorFolderNDJSON(
 			descriptorPath,
 			filepath.Join(rootPath, packageDir),
 			packageDir,
 			&processed,
-			zipWriter,
-			&zipMutex,
+			gzipWriter,
+			&gzipMutex,
 		)
 	}
 
-	stopProgress()
+	// Finalize writers
+	gzipWriter.Close()
+	pw.Close()
+	wg.Wait()
 
+	stopProgress()
 	n := processed.Load()
 	fmt.Fprint(os.Stderr, "\r")
 
-	// Display final processing summary
 	successColor.Fprintf(os.Stderr, "Completed: %d of %d files read in %s\n", n, total, time.Since(start))
-	successColor.Fprintf(os.Stderr, "ZIP generated at: %s\n", outputZipPath)
 }
 
 // countTotalAxTableFiles performs a pre-scan to determine how many XML files
@@ -169,25 +184,12 @@ func startProgressReporter(processed *atomic.Int64, total int64) func() {
 	}
 }
 
-// processDescriptorFolder processes all XML files in the Descriptor folder of a package.
-// For each XML file found:
-//   - extracts modelFolder (filename without extension)
-//   - extracts modelName (DisplayName field inside AxModelInfo)
-//   - locates the modelFolder inside the package and processes the AxTable subfolder
-//   - generates a JSON file per table and writes it to the ZIP
-//
-// Parameters:
-//   - descriptorPath: path to the Descriptor folder
-//   - packagePath: root path of the package (e.g., .../ApplicationSuite)
-//   - packageDir: name of the package directory (e.g., "ApplicationSuite")
-//   - processed: pointer to atomic progress counter
-//   - zipWriter: output ZIP file writer
-//   - zipMutex: mutex to protect concurrent writes to the ZIP
-func processDescriptorFolder(
+// processDescriptorFolderNDJSON processes all XML files in the Descriptor folder of a package and streams NDJSON to a gzip.Writer.
+func processDescriptorFolderNDJSON(
 	descriptorPath, packagePath, packageDir string,
 	processed *atomic.Int64,
-	zipWriter *zip.Writer,
-	zipMutex *sync.Mutex,
+	gzipWriter *gzip.Writer,
+	gzipMutex *sync.Mutex,
 ) {
 	xmlFiles, err := os.ReadDir(descriptorPath)
 	if err != nil {
@@ -201,8 +203,6 @@ func processDescriptorFolder(
 		}
 
 		xmlFilePath := filepath.Join(descriptorPath, xmlFile.Name())
-
-		// modelFolder → descriptor filename without extension (e.g., "Foundation")
 		modelFolder := strings.TrimSuffix(xmlFile.Name(), ".xml")
 
 		descriptor, err := readDescriptorXML(xmlFilePath, modelFolder)
@@ -211,17 +211,12 @@ func processDescriptorFolder(
 			continue
 		}
 
-		// descriptor.DisplayName → readable modelName (e.g., "Application Suite")
-		_ = descriptor.DisplayName
-
 		axTablePath := filepath.Join(packagePath, descriptor.ModelFolder, "AxTable")
-
-		// Only process the AxTable folder if it exists
 		if _, err := os.Stat(axTablePath); os.IsNotExist(err) {
 			continue
 		}
 
-		processAxTableFolder(axTablePath, packageDir, descriptor.ModelFolder, processed, zipWriter, zipMutex)
+		processAxTableFolderNDJSON(axTablePath, packageDir, descriptor.ModelFolder, processed, gzipWriter, gzipMutex)
 	}
 }
 
@@ -250,21 +245,12 @@ func readDescriptorXML(filePath, modelFolder string) (entity.Descriptor, error) 
 	return descriptor, nil
 }
 
-// processAxTableFolder processes all AxTable.xml files in a folder in parallel (up to maxWorkers).
-// For each file, parses the XML, serializes to JSON, and writes to the ZIP.
-//
-// Parameters:
-//   - axTablePath: path to the AxTable folder
-//   - packageDir: name of the parent package (e.g., "ApplicationSuite")
-//   - modelFolder: name of the model folder (e.g., "Foundation")
-//   - processed: pointer to atomic progress counter
-//   - zipWriter: output ZIP file writer
-//   - zipMutex: mutex to protect concurrent writes to the ZIP
-func processAxTableFolder(
+// processAxTableFolderNDJSON processes all AxTable.xml files in a folder in parallel and streams NDJSON to a gzip.Writer.
+func processAxTableFolderNDJSON(
 	axTablePath, packageDir, modelFolder string,
 	processed *atomic.Int64,
-	zipWriter *zip.Writer,
-	zipMutex *sync.Mutex,
+	gzipWriter *gzip.Writer,
+	gzipMutex *sync.Mutex,
 ) {
 	xmlFiles, err := os.ReadDir(axTablePath)
 	if err != nil {
@@ -272,32 +258,33 @@ func processAxTableFolder(
 		return
 	}
 
-	const maxWorkers = 8 // Limits concurrency to avoid overloading the system
-
+	const maxWorkers = 8
 	var group errgroup.Group
-
 	group.SetLimit(maxWorkers)
 
 	for _, xmlFile := range xmlFiles {
 		if !strings.HasSuffix(xmlFile.Name(), ".xml") {
 			continue
 		}
-
-		// Create a local copy to avoid closure issues in the goroutine (fixed in Go 1.22+)
 		xmlFile := xmlFile
-
 		group.Go(func() error {
 			xmlFilePath := filepath.Join(axTablePath, xmlFile.Name())
-
-			// Parse the table XML
 			table, err := readAxTableXML(xmlFilePath)
 			if err != nil {
 				return fmt.Errorf("error reading %s: %w", xmlFile.Name(), err)
 			}
 
-			// Serialize to JSON and write to the ZIP file
-			if err := writeTableJSON(zipWriter, zipMutex, packageDir, modelFolder, table); err != nil {
-				return fmt.Errorf("error writing JSON for %s: %w", table.Name, err)
+			// Serialize to JSON and write as NDJSON line
+			line, err := json.Marshal(table)
+			if err != nil {
+				return fmt.Errorf("error serializing JSON for %s: %w", table.Name, err)
+			}
+
+			gzipMutex.Lock()
+			_, err = gzipWriter.Write(append(line, '\n'))
+			gzipMutex.Unlock()
+			if err != nil {
+				return fmt.Errorf("error writing NDJSON for %s: %w", table.Name, err)
 			}
 
 			processed.Add(1)
@@ -332,41 +319,4 @@ func readAxTableXML(filePath string) (entity.AxTable, error) {
 	return axTable, nil
 }
 
-// writeTableJSON serializes an AxTable to indented JSON and writes it as an entry in the ZIP file.
-// The entry path inside the ZIP follows the pattern: packageDir/modelFolder/TableName.json
-//
-// Parameters:
-//   - zipWriter: output ZIP file writer
-//   - mutex: mutex to ensure exclusive access to zipWriter
-//   - packageDir: name of the parent package (e.g., "ApplicationSuite")
-//   - modelFolder: name of the model folder (e.g., "Foundation")
-//   - table: AxTable struct to be serialized
-//
-// Returns:
-//   - error, if any
-func writeTableJSON(
-	zipWriter *zip.Writer,
-	mutex *sync.Mutex,
-	packageDir, modelFolder string,
-	table entity.AxTable,
-) error {
-
-	jsonData, err := json.MarshalIndent(table, "", "  ")
-	if err != nil {
-		return fmt.Errorf("error serializing JSON: %w", err)
-	}
-
-	// Path inside the ZIP: package/modelFolder/TableName.json
-	entryName := fmt.Sprintf("%s/%s/%s.json", packageDir, modelFolder, table.Name)
-
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	w, err := zipWriter.Create(entryName)
-	if err != nil {
-		return fmt.Errorf("erro ao criar entrada ZIP %s: %w", entryName, err)
-	}
-
-	_, err = w.Write(jsonData)
-	return err
-}
+// writeTableJSON is no longer needed in NDJSON streaming mode.
