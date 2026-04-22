@@ -32,7 +32,7 @@ func NewRouter() *gin.Engine {
 
 	api := r.Group("/api")
 	{
-		api.POST("/process-packages", handlers.ProcessPackages)
+		api.POST("/ingest", handlers.IngestHandler)
 
 		api.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "ok"})
