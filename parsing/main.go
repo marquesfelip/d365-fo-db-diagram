@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,7 +51,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		client := &http.Client{}
-		req, err := http.NewRequest("POST", "http://localhost:8080/api/process-packages", pr)
+		req, err := http.NewRequest("POST", "http://localhost:8080/api/ingest", pr)
 		if err != nil {
 			errColor.Fprintf(os.Stderr, "error creating HTTP request: %v\n", err)
 			pr.CloseWithError(err)
@@ -216,7 +217,7 @@ func processDescriptorFolderNDJSON(
 			continue
 		}
 
-		processAxTableFolderNDJSON(axTablePath, packageDir, descriptor.ModelFolder, processed, gzipWriter, gzipMutex)
+		processAxTableFolderNDJSON(axTablePath, packageDir, descriptor.ModelFolder, descriptor.DisplayName, processed, gzipWriter, gzipMutex)
 	}
 }
 
@@ -247,7 +248,7 @@ func readDescriptorXML(filePath, modelFolder string) (entity.Descriptor, error) 
 
 // processAxTableFolderNDJSON processes all AxTable.xml files in a folder in parallel and streams NDJSON to a gzip.Writer.
 func processAxTableFolderNDJSON(
-	axTablePath, packageDir, modelFolder string,
+	axTablePath, packageDir, modelFolder, modelDisplayName string,
 	processed *atomic.Int64,
 	gzipWriter *gzip.Writer,
 	gzipMutex *sync.Mutex,
@@ -258,7 +259,7 @@ func processAxTableFolderNDJSON(
 		return
 	}
 
-	const maxWorkers = 8
+	maxWorkers := runtime.NumCPU() * 2
 	var group errgroup.Group
 	group.SetLimit(maxWorkers)
 
@@ -269,7 +270,7 @@ func processAxTableFolderNDJSON(
 		xmlFile := xmlFile
 		group.Go(func() error {
 			xmlFilePath := filepath.Join(axTablePath, xmlFile.Name())
-			table, err := readAxTableXML(xmlFilePath)
+			table, err := readAxTableXML(xmlFilePath, modelDisplayName)
 			if err != nil {
 				return fmt.Errorf("error reading %s: %w", xmlFile.Name(), err)
 			}
@@ -301,11 +302,12 @@ func processAxTableFolderNDJSON(
 //
 // Parameters:
 //   - filePath: path to the AxTable.xml file
+//   - modelName: the DisplayName of the model to assign to AxTable.Model
 //
 // Returns:
-//   - AxTable struct with all fields read
+//   - AxTable struct with all fields read and Model set
 //   - error, if any
-func readAxTableXML(filePath string) (entity.AxTable, error) {
+func readAxTableXML(filePath string, modelName string) (entity.AxTable, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return entity.AxTable{}, err
@@ -315,7 +317,7 @@ func readAxTableXML(filePath string) (entity.AxTable, error) {
 	if err := xml.Unmarshal(data, &axTable); err != nil {
 		return entity.AxTable{}, err
 	}
-
+	axTable.Model = modelName
 	return axTable, nil
 }
 

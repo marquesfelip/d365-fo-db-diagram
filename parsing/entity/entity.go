@@ -1,6 +1,31 @@
 package entity
 
-import "encoding/xml"
+import (
+	"encoding/xml"
+	"fmt"
+	"strings"
+)
+
+type NoYes bool
+
+func (b *NoYes) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	var v string
+
+	if err := d.DecodeElement(&v, &start); err != nil {
+		return err
+	}
+
+	switch s := strings.ToLower(strings.TrimSpace(v)); s {
+	case "yes", "true":
+		*b = true
+	case "no", "false":
+		*b = false
+	default:
+		return fmt.Errorf("invalid No/Yes value for bool: %q", v)
+	}
+
+	return nil
+}
 
 // Descriptor represents the metadata of a D365 model (Descriptor folder XML file).
 // ModelFolder is manually filled after reading, with the XML filename without extension,
@@ -19,7 +44,7 @@ type AxTable struct {
 	Model              string   `xml:"-"`
 	Layer              string   `xml:"-"`
 	Extends            string   `xml:"Extends"`
-	SaveDataPerCompany string   `xml:"SaveDataPerCompany"`
+	SaveDataPerCompany NoYes    `xml:"SaveDataPerCompany"`
 	TableGroup         string   `xml:"TableGroup"`
 	TableType          string   `xml:"TableType"`
 	PrimaryIndex       string   `xml:"PrimaryIndex"`
@@ -41,10 +66,10 @@ type AxTableField struct {
 // AxTableRelation represents a relation in an AxTable.
 type AxTableRelation struct {
 	Name                    string `xml:"Name"`
-	SourceTable             string `xml:"SourceTable"` // Table of the file being read
+	SourceTable             string `xml:"_"` // Table of the file being read
 	RelatedTable            string `xml:"RelatedTable"`
-	EDTRelation             bool   `xml:"EDTRelation"` // TODO: default false
-	OnDelete                string `xml:"OnDelete"`    // default null
+	EDTRelation             NoYes  `xml:"EDTRelation"`
+	OnDelete                string `xml:"OnDelete"` // default null
 	Cardinality             string `xml:"Cardinality"`
 	RelatedTableCardinality string `xml:"RelatedTableCardinality"`
 	RelationshipType        string `xml:"RelationshipType"`
