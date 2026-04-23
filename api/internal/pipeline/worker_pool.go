@@ -12,6 +12,8 @@ type WorkerPool struct {
 	queue chan AxTableRecord
 	repo  *repository.AxTableRepository
 	wg    sync.WaitGroup
+
+	batchSize int
 }
 
 func NewWorkerPool(
@@ -21,8 +23,9 @@ func NewWorkerPool(
 ) *WorkerPool {
 
 	wp := &WorkerPool{
-		queue: make(chan AxTableRecord, queueSize),
-		repo:  repo,
+		queue:     make(chan AxTableRecord, queueSize),
+		repo:      repo,
+		batchSize: 500,
 	}
 
 	for i := range workerCount {
@@ -35,6 +38,21 @@ func NewWorkerPool(
 
 func (wp *WorkerPool) work(id int) {
 	defer wp.wg.Done()
+
+	buffer := make([]model.AxTable, 0, wp.batchSize)
+
+	flush := func() {
+		if len(buffer) == 0 {
+			return
+		}
+
+		err := wp.repo.CreateBatch(buffer)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+
+		buffer = buffer[:0]
+	}
 
 	for record := range wp.queue {
 		dataAxTable := model.AxTable{
@@ -49,11 +67,13 @@ func (wp *WorkerPool) work(id int) {
 			ReplacementKey:     record.ReplacementKey,
 		}
 
-		err := wp.repo.CreateBatch([]model.AxTable{dataAxTable})
-		if err != nil {
-			log.Fatalf("%s", err.Error())
+		buffer = append(buffer, dataAxTable)
+		if len(buffer) >= wp.batchSize {
+			flush()
 		}
 	}
+
+	flush()
 }
 
 func (wp *WorkerPool) Submit(r AxTableRecord) {
