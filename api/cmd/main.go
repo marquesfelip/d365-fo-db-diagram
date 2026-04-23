@@ -51,7 +51,7 @@ func main() {
 		log.Fatalf("error: %s\n", autoMigrateErr.Error())
 	}
 
-	r := server.NewRouter()
+	r := server.NewRouter(database.DB)
 
 	if err := r.Run(fmt.Sprintf(":%s", port)); err != nil {
 		log.Fatal(err)

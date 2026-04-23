@@ -11,11 +11,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/marquesfelip/d365-fo-db-diagram/internal/pipeline"
+	"github.com/marquesfelip/d365-fo-db-diagram/internal/repository"
 )
 
-type Record map[string]any
+type IngestHandler struct {
+	axRepo *repository.AxTableRepository
+}
 
-func IngestHandler(ctx *gin.Context) {
+func NewIngestHandler(repo *repository.AxTableRepository) *IngestHandler {
+	return &IngestHandler{
+		axRepo: repo,
+	}
+}
+
+func (i *IngestHandler) Handle(ctx *gin.Context) {
 	body := ctx.Request.Body
 	defer body.Close()
 
@@ -31,26 +40,10 @@ func IngestHandler(ctx *gin.Context) {
 		reader = gz
 	}
 
-	// if ctx.GetHeader("Content-Encoding") != "gzip" {
-	// 	ctx.JSON(http.StatusBadRequest, gin.H{"message": "Content-Encoding is not in gzip"})
-	// 	return
-	// }
-	//
-	// gz, err := gzip.NewReader(body)
-	// if err != nil {
-	// 	ctx.JSON(http.StatusBadRequest, gin.H{
-	// 		"message": fmt.Sprintf(err.Error()),
-	// 	})
-	// 	return
-	// }
-	//
-	// defer gz.Close()
-	// reader = gz
-
 	workers := runtime.NumCPU() * 2
 	queueSize := 1000
 
-	wp := pipeline.NewWorkerPool(workers, queueSize)
+	wp := pipeline.NewWorkerPool(workers, queueSize, i.axRepo)
 
 	scanner := bufio.NewScanner(reader)
 
@@ -63,7 +56,7 @@ func IngestHandler(ctx *gin.Context) {
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
-		var record pipeline.Record
+		var record pipeline.AxTableRecord
 
 		if err := json.Unmarshal(line, &record); err != nil {
 			log.Println("invalid json:", err)
