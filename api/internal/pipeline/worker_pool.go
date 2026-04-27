@@ -9,8 +9,8 @@ import (
 )
 
 type WorkerPool struct {
-	queue chan AxTableRecord
-	repo  *repository.AxTableRepository
+	queue chan RawRecord
+	repo  *repository.RawAxTableRepository
 	wg    sync.WaitGroup
 
 	batchSize int
@@ -19,11 +19,11 @@ type WorkerPool struct {
 func NewWorkerPool(
 	workerCount int,
 	queueSize int,
-	repo *repository.AxTableRepository,
+	repo *repository.RawAxTableRepository,
 ) *WorkerPool {
 
 	wp := &WorkerPool{
-		queue:     make(chan AxTableRecord, queueSize),
+		queue:     make(chan RawRecord, queueSize),
 		repo:      repo,
 		batchSize: 500,
 	}
@@ -39,7 +39,7 @@ func NewWorkerPool(
 func (wp *WorkerPool) work(id int) {
 	defer wp.wg.Done()
 
-	buffer := make([]model.AxTable, 0, wp.batchSize)
+	buffer := make([]model.RawAxTable, 0, wp.batchSize)
 
 	flush := func() {
 		if len(buffer) == 0 {
@@ -55,19 +55,14 @@ func (wp *WorkerPool) work(id int) {
 	}
 
 	for record := range wp.queue {
-		dataAxTable := model.AxTable{
-			Name:               record.Name,
-			Model:              record.Model,
-			Layer:              &record.Layer,
-			Extends:            &record.Extends,
-			SaveDataPerCompany: record.SaveDataPerCompany,
-			TableGroup:         record.TableGroup,
-			TableType:          record.TableType,
-			PrimaryIndex:       record.PrimaryIndex,
-			ReplacementKey:     record.ReplacementKey,
+		rawData := model.RawAxTable{
+			Name:    record.Name,
+			Model:   record.Model,
+			Layer:   &record.Layer,
+			Payload: record.Data,
 		}
 
-		buffer = append(buffer, dataAxTable)
+		buffer = append(buffer, rawData)
 		if len(buffer) >= wp.batchSize {
 			flush()
 		}
@@ -76,7 +71,7 @@ func (wp *WorkerPool) work(id int) {
 	flush()
 }
 
-func (wp *WorkerPool) Submit(r AxTableRecord) {
+func (wp *WorkerPool) Submit(r RawRecord) {
 	wp.queue <- r
 }
 

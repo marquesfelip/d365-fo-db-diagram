@@ -6,7 +6,7 @@ type AxTable struct {
 	Model              string `json:"-"`
 	Layer              string `json:"-"`
 	Extends            string `json:"Extends"`
-	SaveDataPerCompany string `json:"SaveDataPerCompany"`
+	SaveDataPerCompany bool   `json:"SaveDataPerCompany"`
 	TableGroup         string `json:"TableGroup"`
 	TableType          string `json:"TableType"`
 	PrimaryIndex       string `json:"PrimaryIndex"`
@@ -30,8 +30,8 @@ type AxTableRelation struct {
 	Name                    string `json:"Name"`
 	SourceTable             string `json:"SourceTable"` // Table of the file being read
 	RelatedTable            string `json:"RelatedTable"`
-	EDTRelation             bool   `json:"EDTRelation"` // TODO: default false
-	OnDelete                string `json:"OnDelete"`    // default null
+	EDTRelation             bool   `json:"EDTRelation"`
+	OnDelete                string `json:"OnDelete"`
 	Cardinality             string `json:"Cardinality"`
 	RelatedTableCardinality string `json:"RelatedTableCardinality"`
 	RelationshipType        string `json:"RelationshipType"`

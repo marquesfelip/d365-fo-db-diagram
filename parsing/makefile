@@ -1,19 +1,17 @@
-.PHONY: default run build test doc clean
+.PHONY: default run build test clean
 
 # Variables
-APP_NAME=app-api
+APP_NAME=app-parsing
 
 # Tasks
 default: run
 
 run:
-	cd "./cmd" && air
+	air
 build:
 	@go build -o $(APP_NAME) main.go
 test:
 	@go test ./ ...
-doc:
-	@swag init
 clean:
 	@rm -f $(APP_NAME)
 	@rm -rf ./docs

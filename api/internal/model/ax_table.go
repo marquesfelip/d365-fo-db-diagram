@@ -2,7 +2,7 @@ package model
 
 type AxTable struct {
 	ID                 uint    `gorm:"column:id_ax_table;primaryKey;autoIncrement"`
-	Name               string  `gorm:"column:name"`
+	Name               string  `gorm:"column:name;uniqueIndex"`
 	Model              string  `gorm:"column:model"`
 	Layer              *string `gorm:"column:layer"`
 	Extends            *string `gorm:"column:extends"`

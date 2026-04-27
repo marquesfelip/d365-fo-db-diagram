@@ -2,7 +2,7 @@ package model
 
 type Edt struct {
 	ID               uint    `gorm:"column:id_edt;primaryKey;autoIncrement"`
-	Name             string  `gorm:"column:name"`
+	Name             string  `gorm:"column:name;uniqueIndex"`
 	Extends          *string `gorm:"column:extends"`
 	FkExtends        *uint   `gorm:"column:fk_extends"`
 	ReferenceTable   string  `gorm:"column:reference_table"`

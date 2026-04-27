@@ -15,10 +15,10 @@ import (
 )
 
 type IngestHandler struct {
-	axRepo *repository.AxTableRepository
+	axRepo *repository.RawAxTableRepository
 }
 
-func NewIngestHandler(repo *repository.AxTableRepository) *IngestHandler {
+func NewIngestHandler(repo *repository.RawAxTableRepository) *IngestHandler {
 	return &IngestHandler{
 		axRepo: repo,
 	}
@@ -56,13 +56,18 @@ func (i *IngestHandler) Handle(ctx *gin.Context) {
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
-		var record pipeline.AxTableRecord
+		var parsed pipeline.AxTableRecord
 
-		if err := json.Unmarshal(line, &record); err != nil {
+		if err := json.Unmarshal(line, &parsed); err != nil {
 			log.Println("invalid json:", err)
 			continue
 		}
-		wp.Submit(record)
+		wp.Submit(pipeline.RawRecord{
+			Name:  parsed.Name,
+			Model: parsed.Model,
+			Layer: parsed.Layer,
+			Data:  append([]byte(nil), line...),
+		})
 		count++
 	}
 

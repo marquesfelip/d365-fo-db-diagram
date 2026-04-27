@@ -45,6 +45,7 @@ func main() {
 		&model.TableRelation{},
 		&model.RelationField{},
 		&model.Edt{},
+		&model.RawAxTable{},
 	)
 
 	if autoMigrateErr != nil {

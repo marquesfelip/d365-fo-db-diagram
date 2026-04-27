@@ -34,12 +34,14 @@ func NewRouter(db *gorm.DB) *gin.Engine {
 
 	r.SetTrustedProxies([]string{"localhost"})
 
-	AxTableRepo := repository.NewAxTableRepository(db)
-	ingestHandler := handlers.NewIngestHandler(AxTableRepo)
+	rawRepo := repository.NewRawAxTableRepository(db)
+	ingestHandler := handlers.NewIngestHandler(rawRepo)
+	normalizeHandler := handlers.NewNormalizeHandler(db)
 
 	api := r.Group("/api")
 	{
 		api.POST("/ingest", ingestHandler.Handle)
+		api.POST("/normalize", normalizeHandler.Handle)
 
 		api.GET("/health", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "ok"})
